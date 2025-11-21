@@ -62,13 +62,6 @@ namespace Rivet {
       ChargedFinalState tracks(Cuts::pT > 0.2*GeV && Cuts::abseta < m_maxEtaTracks);
       declare(tracks, "tracks");
 
-      // TODO: I'm not sure why the Durham algorithm seems to be failing, but we should figure that out...
-      //FastJets jetDurham(fs, FastJets::Algo::DURHAM, m_jetRadius, JetAlg::Muons::NONE, JetAlg::Invisibles::NONE);
-      FastJets jetDurham(fs, FastJets::Algo::ANTIKT, m_jetRadius, JetAlg::Muons::NONE, JetAlg::Invisibles::NONE);
-      declare(jetDurham, "DurhamJets");
-
-
-
       ////////////////////////////////////////////////////////////////////////////////////////////////
       // Book histograms
      
@@ -79,6 +72,7 @@ namespace Rivet {
       std::string nameDijetMass2 = "dijet_mass_2";
       book(_h_dijetMass1, nameDijetMass1,  40, 0, 120);
       book(_h_dijetMass2, nameDijetMass2,  40, 0, 120);
+
     }
 
 
@@ -94,16 +88,23 @@ namespace Rivet {
       // A plot of the particle multiplicity (after all cuts)
       // A plot like Figure 6 (will probably be challenging), for all 4 regions
       
-
-
       // Things we don't need right now, but might want later
       //double collisionE = sqrtS();
       //const Particles& tracks = apply<ChargedFinalState>(event, "tracks").particlesByPt();
-      //const Particles& particles = apply<FinalState>(event, "particles").particles();
-      
+      const Particles& particles = apply<FinalState>(event, "particles").particles();
 
-      const FastJets& durjetAlg = apply<FastJets>(event, "DurhamJets");
-      const std::vector<fastjet::PseudoJet> durjet = durjetAlg.pseudojetsByPt();
+      // Fastjet analysis - select algorithm and parameters
+      fastjet::Strategy               strategy = fastjet::Best;
+      fastjet::RecombinationScheme    recombScheme = fastjet::E_scheme;
+      fastjet::JetDefinition*         jetDef = new fastjet::JetDefinition(fastjet::ee_kt_algorithm,
+                                      recombScheme, strategy);
+
+      // Run Fastjet algorithm
+      fastjet::ClusterSequence clustSeq(particles, *jetDef);
+      int nJetMin = 4;
+      //clustSeq.exclusive_dmerge_max(nJetMin-1);
+
+      const std::vector<fastjet::PseudoJet> durjet = clustSeq.exclusive_jets(nJetMin);
 
       std::vector<fastjet::PseudoJet> selectedJets;
       for(unsigned int i=0; i<durjet.size(); i++){
@@ -113,7 +114,7 @@ namespace Rivet {
           FourMomentum fv1 = FourVector(j1.E(), j1.px() , j1.py(), j1.pz());
           FourMomentum fv2 = FourVector(j2.E(), j2.px() , j2.py(), j2.pz());
           double ycut = 2 * j2.E()*j2.E() * (1- std::cos(fv1.angle(fv2))) / (jj.E()*jj.E());
-          if(ycut < 0.01) {
+          if(ycut < 0.005) {
             selectedJets.push_back(jj);
           }
         }
@@ -160,7 +161,6 @@ namespace Rivet {
 
       // Find two other angles that are between 100 and 140 degrees, and aren't adjacent
       std::vector<double> jetAngles;
-      std::vector<double> jetMasses;
       std::vector<int> jetIndices1;
       std::vector<int> jetIndices2;
 
@@ -178,7 +178,6 @@ namespace Rivet {
 
           jetIndices1.push_back(i);
           jetIndices2.push_back(j);
-          jetMasses.push_back(jetPair1.m());
           jetAngles.push_back( angleInDegrees);
         }
       }
@@ -211,6 +210,7 @@ namespace Rivet {
           isPass = true;
           index1 = jetIndices1[i];
           index2 = jetIndices2[i];
+
           index3 = jetIndices1[j];
           index4 = jetIndices2[j];
         }
@@ -224,13 +224,12 @@ namespace Rivet {
 
       _h_dijetMass1->fill(correctJetPair1.m());
       _h_dijetMass2->fill(correctJetPair2.m());
-
-  
     }
 
     /// Normalise histograms etc., after the run
     void finalize() 
     {      
+     // TODO: The histograms should get normalized
     }
 
 
@@ -244,12 +243,8 @@ namespace Rivet {
     const double m_maxEtaTracks = 2.1; 
     const double m_maxEta = 2.1;
 
-    const double m_jetRadius = 0.7;
-
-    //std::vector<Histo1DPtr> _h_dijetMasses;
     Histo1DPtr _h_dijetMass1;
     Histo1DPtr _h_dijetMass2;
-
   };
 
 
