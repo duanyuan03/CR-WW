@@ -32,7 +32,7 @@ namespace Rivet {
 
     /// Constructor
     RIVET_DEFAULT_ANALYSIS_CTOR(MC_COLORRECONNECTION);
-   
+
     // Given a list of bins, gives the bin which the value falls in
     // If it is below or above the last bin value, it will return -1
     int getBin(const double value, const std::vector<double> bins){
@@ -42,9 +42,6 @@ namespace Rivet {
       return -1;
     }
 
-
-
-  
     //////////////////////////////////////////////////////////////////////////////////////////////////
 
     /// @name Analysis methods
@@ -62,9 +59,15 @@ namespace Rivet {
       ChargedFinalState tracks(Cuts::pT > 0.2*GeV && Cuts::abseta < m_maxEtaTracks);
       declare(tracks, "tracks");
 
+      // TODO: I'm not sure why the Durham algorithm seems to be failing, but we should figure that out...
+      //FastJets jetDurham(fs, FastJets::Algo::DURHAM, m_jetRadius, JetAlg::Muons::NONE, JetAlg::Invisibles::NONE);
+      FastJets jetDurham(fs, FastJets::Algo::ANTIKT, m_jetRadius, JetAlg::Muons::NONE, JetAlg::Invisibles::NONE);
+      declare(jetDurham, "DurhamJets");
+
+
       ////////////////////////////////////////////////////////////////////////////////////////////////
       // Book histograms
-     
+
       // One histogram for each of the two jet pairs
       Histo1DPtr tmpDijetMass1;
       Histo1DPtr tmpDijetMass2;
@@ -72,6 +75,31 @@ namespace Rivet {
       std::string nameDijetMass2 = "dijet_mass_2";
       book(_h_dijetMass1, nameDijetMass1,  40, 0, 120);
       book(_h_dijetMass2, nameDijetMass2,  40, 0, 120);
+
+      // One histogram for tracking what particles are left after cuts
+      std::string cutflow = "Cutflow";
+      book(_h_cutflow, cutflow, 5, 0.5, 5.5);
+
+      //ycut before event vetoes
+      book(_h_ycutAll, "ycutAll", 60, 1e-6, 0.5);
+
+      //Selected jets before cut
+      book(_h_selectedJets, "selectedJets", 13, -0.5, 12.5); 
+
+      //particle multiplicity before cuts
+      book(_h_mult_before, "PreMultiplicity", 150, -0.5, 150.5);   
+
+      //particle multiplicity after cuts
+      book(_h_mult_after, "PostMultiplicity", 150, -0.5, 150.5);
+
+      //Figure 5
+      book(phi_rescaled, "ParticleFlow_PhiRescaled", 84, -0.2, 4.2);
+
+      //Figure 6
+      book(insideTotal, "Inside_W_Region", 24, -0.2, 1.2);
+      book(OutsideTotal, "Outside_W_Region", 24, -0.2, 1.2);
+      book(region_ratio, "Region_Ratio", 24, -0.2, 1.2);
+
 
     }
 
@@ -84,14 +112,20 @@ namespace Rivet {
       // A cutflow of what event selections are leading to events being removed
       // A plot of the ycut of all durjet jets (before any cuts)
       // A plot of the number of selected jets (before any cuts)
+      
       // A plot of the particle multiplicity (before any cuts)
       // A plot of the particle multiplicity (after all cuts)
+
       // A plot like Figure 6 (will probably be challenging), for all 4 regions
-      
+
       // Things we don't need right now, but might want later
       //double collisionE = sqrtS();
       //const Particles& tracks = apply<ChargedFinalState>(event, "tracks").particlesByPt();
       const Particles& particles = apply<FinalState>(event, "particles").particles();
+
+      //All events
+      //Use event.weight() maybe to normalize
+      _h_cutflow->fill(1);
 
       // Fastjet analysis - select algorithm and parameters
       fastjet::Strategy               strategy = fastjet::Best;
@@ -106,7 +140,10 @@ namespace Rivet {
 
       const std::vector<fastjet::PseudoJet> durjet = clustSeq.exclusive_jets(nJetMin);
 
+      _h_mult_before->fill(particles.size());
+
       std::vector<fastjet::PseudoJet> selectedJets;
+
       for(unsigned int i=0; i<durjet.size(); i++){
         PseudoJet jj, j1, j2;
         jj = durjet[i];
@@ -114,15 +151,24 @@ namespace Rivet {
           FourMomentum fv1 = FourVector(j1.E(), j1.px() , j1.py(), j1.pz());
           FourMomentum fv2 = FourVector(j2.E(), j2.px() , j2.py(), j2.pz());
           double ycut = 2 * j2.E()*j2.E() * (1- std::cos(fv1.angle(fv2))) / (jj.E()*jj.E());
+
+          //Add ycut pre-veto
+          _h_ycutAll->fill(ycut);
+
           if(ycut < 0.005) {
             selectedJets.push_back(jj);
           }
         }
       }
 
+      //Histo of selected jets
+      _h_selectedJets->fill(durjet.size());
 
       // Need exactly 4 jets
       if (selectedJets.size() != 4) vetoEvent;
+
+      //Add event that survived 4-jet selection
+      _h_cutflow->fill(2);
 
       // Two smallest angles < 100 degrees
       int minJetPair_1_jet1index = -1;
@@ -130,7 +176,7 @@ namespace Rivet {
 
       int minJetPair_2_jet1index = -1;
       int minJetPair_2_jet2index = -1;
- 
+
       double minJetAngle1 = 1000;
       double minJetAngle2 = 1000;
 
@@ -155,20 +201,21 @@ namespace Rivet {
             minJetPair_2_jet2index = j;
             minJetAngle2 = angleInDegrees;
           }
-          
+
         }
       }
 
       // Find two other angles that are between 100 and 140 degrees, and aren't adjacent
       std::vector<double> jetAngles;
+      std::vector<double> jetMasses;
       std::vector<int> jetIndices1;
       std::vector<int> jetIndices2;
 
       for(unsigned int i=0; i<selectedJets.size(); i++){
         for(unsigned int j=i+1; j<selectedJets.size(); j++){
-          if( (i == minJetPair_1_jet1index && j == minJetPair_1_jet2index) || 
+          if( (i == minJetPair_1_jet1index && j == minJetPair_1_jet2index) ||
               (j == minJetPair_1_jet1index && i == minJetPair_1_jet2index) ||
-              (i == minJetPair_2_jet1index && j == minJetPair_2_jet2index) || 
+              (i == minJetPair_2_jet1index && j == minJetPair_2_jet2index) ||
               (j == minJetPair_2_jet1index && i == minJetPair_2_jet2index) ) continue;
 
           FourMomentum fv1 = FourVector(selectedJets[i].E(), selectedJets[i].px() , selectedJets[i].py(), selectedJets[i].pz());
@@ -178,6 +225,7 @@ namespace Rivet {
 
           jetIndices1.push_back(i);
           jetIndices2.push_back(j);
+          jetMasses.push_back(jetPair1.m());
           jetAngles.push_back( angleInDegrees);
         }
       }
@@ -185,6 +233,8 @@ namespace Rivet {
       if(minJetAngle1 > 100) vetoEvent;
       if(minJetAngle2 > 100) vetoEvent;
 
+      //Cut if the pairs of jets are too wide
+      _h_cutflow->fill(3);
 
       // These two angles don't share a jet
       // Not sure if we should veto the event, or just find another pairing
@@ -192,6 +242,9 @@ namespace Rivet {
           minJetPair_1_jet2index ==  minJetPair_2_jet1index || minJetPair_1_jet2index ==  minJetPair_2_jet2index){
          vetoEvent;
       }
+
+      //Cut if jets are not distinct pairs
+      _h_cutflow->fill(4);
 
       bool isPass = false;
       int index1 = -1;
@@ -210,7 +263,6 @@ namespace Rivet {
           isPass = true;
           index1 = jetIndices1[i];
           index2 = jetIndices2[i];
-
           index3 = jetIndices1[j];
           index4 = jetIndices2[j];
         }
@@ -218,18 +270,85 @@ namespace Rivet {
 
       if(!isPass) vetoEvent;
 
+      //cut if the jets don't fit expected geometry
+      _h_cutflow->fill(5);
 
       fastjet::PseudoJet correctJetPair1 = selectedJets[index1] + selectedJets[index2];
       fastjet::PseudoJet correctJetPair2 = selectedJets[index3] + selectedJets[index4];
 
       _h_dijetMass1->fill(correctJetPair1.m());
       _h_dijetMass2->fill(correctJetPair2.m());
+
+      _h_mult_after->fill(particles.size());
+
+      //A quest for Figure 6
+
+      int idx[5] = {index1, index2, index3, index4, index1};
+
+      for (int i = 0; i < 4; ++i) {
+        
+        //First we will define a normal vector from a couple of 3 Vectors:
+        Vector3 a(selectedJets[idx[i]].px(), selectedJets[idx[i]].py(), selectedJets[idx[i]].pz());
+        Vector3 b(selectedJets[idx[i+1]].px(), selectedJets[idx[i+1]].py(), selectedJets[idx[i+1]].pz());
+
+        Vector3 n = a.cross(b);
+        double nmag = n.mod();
+        Vector3 unit_n = n / nmag;
+
+        //loop through all particles and see if its within the region
+        for (const Particle& part : particles){
+          Vector3 p(part.px(), part.py(), part.pz());
+          Vector3 proj_p = p - unit_n * p.dot(unit_n);
+
+          //Calculate angles with a as the reference jet
+          double thetaRef = atan2(a.cross(b).dot(unit_n), a.dot(b));
+          double theta_p = atan2(a.cross(proj_p).dot(unit_n), a.dot(proj_p));
+
+          //if its in the region, calculate a phi rescaled and fill
+          if ((0 < theta_p && theta_p < thetaRef) || (0 > theta_p && theta_p > thetaRef)){
+            double thetaRescaled = theta_p/thetaRef;
+            phi_rescaled->fill(thetaRescaled+i);
+
+            //Check if inside or outside region and fill cooresponding histo
+            if (i == 0 || i == 2){
+              insideTotal->fill(thetaRescaled);
+            }
+            if (i == 1 || i == 3){
+              OutsideTotal->fill(thetaRescaled);
+            }
+          }
+        }
+      }
     }
 
     /// Normalise histograms etc., after the run
-    void finalize() 
-    {      
-     // TODO: The histograms should get normalized
+    void finalize()
+    {
+      normalize(_h_dijetMass1);
+      normalize(_h_dijetMass2);
+      normalize(_h_ycutAll);
+      normalize(_h_selectedJets);
+      normalize(_h_mult_before);
+      normalize(_h_mult_after);
+      scale(phi_rescaled, 1.0 / sumOfWeights());
+      scale(insideTotal, 1.0 / sumOfWeights());
+      scale(OutsideTotal, 1.0 / sumOfWeights());
+
+      //Find actual ratio for figure 6
+
+      for (size_t i = 0; i < insideTotal->numBins(); ++i) {
+          
+          // Get the bin content
+          double insideValue  = insideTotal->bin(i).sumW();
+          double outsideValue = OutsideTotal->bin(i).sumW();
+
+          // Compute the ratio safely
+          double ratio = (outsideValue != 0) ? insideValue / outsideValue : 0;
+
+          // Fill the ratio into the corresponding bin of region_ratio
+          region_ratio->fillBin(i, ratio);
+      }
+      
     }
 
 
@@ -240,11 +359,34 @@ namespace Rivet {
 
     // For these studies, currently studying the same eta cutoff for all paricles and for tracks
     // This choice is somewhat arbitrary, and we could probably go higher in eta with future detectors
-    const double m_maxEtaTracks = 2.1; 
+    const double m_maxEtaTracks = 2.1;
     const double m_maxEta = 2.1;
 
+    const double m_jetRadius = 0.7;
+
+    //std::vector<Histo1DPtr> _h_dijetMasses;
     Histo1DPtr _h_dijetMass1;
     Histo1DPtr _h_dijetMass2;
+    //Same thing, std::vector<Histo1DPtr> _h_cutflow;
+    Histo1DPtr _h_cutflow;
+    //ycut before event cuts
+    Histo1DPtr _h_ycutAll;
+    //# of selected jets before cut
+    Histo1DPtr _h_selectedJets;
+    //particle multiplicity before cuts
+    Histo1DPtr _h_mult_before;
+    //particle multiplicity after cuts
+    Histo1DPtr _h_mult_after;
+
+    //Figure 6, particle flow per event in each region
+    Histo1DPtr phi_rescaled;
+
+    //Figure 5, ratio between particle count inside/outside
+    Histo1DPtr insideTotal;
+    Histo1DPtr OutsideTotal;
+    Histo1DPtr region_ratio;
+
+
   };
 
 
