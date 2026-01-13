@@ -7,6 +7,7 @@
 #include "Rivet/Projections/DirectFinalState.hh"
 #include "Rivet/Projections/VetoedFinalState.hh"
 #include "Rivet/Projections/ChargedFinalState.hh"
+//#include "Rivet/Logging.hh"
 
 #include <string.h>
 
@@ -99,10 +100,7 @@ namespace Rivet {
       book(insideTotal, "Inside_W_Region", 24, -0.2, 1.2);
       book(OutsideTotal, "Outside_W_Region", 24, -0.2, 1.2);
       book(region_ratio, "Region_Ratio", 24, -0.2, 1.2);
-
-
     }
-
 
 
     /// Perform the per-event analysis
@@ -206,13 +204,15 @@ namespace Rivet {
       }
 
       // Find two other angles that are between 100 and 140 degrees, and aren't adjacent
+      //These become the jet pairs from the W
       std::vector<double> jetAngles;
-      std::vector<double> jetMasses;
+      //std::vector<double> jetMasses;
       std::vector<int> jetIndices1;
       std::vector<int> jetIndices2;
 
       for(unsigned int i=0; i<selectedJets.size(); i++){
         for(unsigned int j=i+1; j<selectedJets.size(); j++){
+          //The selected jet pairs aren't the smallest pairs
           if( (i == minJetPair_1_jet1index && j == minJetPair_1_jet2index) ||
               (j == minJetPair_1_jet1index && i == minJetPair_1_jet2index) ||
               (i == minJetPair_2_jet1index && j == minJetPair_2_jet2index) ||
@@ -221,15 +221,17 @@ namespace Rivet {
           FourMomentum fv1 = FourVector(selectedJets[i].E(), selectedJets[i].px() , selectedJets[i].py(), selectedJets[i].pz());
           FourMomentum fv2 = FourVector(selectedJets[j].E(), selectedJets[j].px() , selectedJets[j].py(), selectedJets[j].pz());
           double angleInDegrees = fv1.angle(fv2) * 180 / 3.14;
-          fastjet::PseudoJet jetPair1 = selectedJets[i] + selectedJets[j];
+          //fastjet::PseudoJet jetPair1 = selectedJets[i] + selectedJets[j];
 
+          //Collect the 4 remaining jet combinations and their angles
           jetIndices1.push_back(i);
           jetIndices2.push_back(j);
-          jetMasses.push_back(jetPair1.m());
+          //jetMasses.push_back(jetPair1.m());
           jetAngles.push_back( angleInDegrees);
         }
       }
 
+      //Apply cut that the smallest angles must be less than 100 degrees
       if(minJetAngle1 > 100) vetoEvent;
       if(minJetAngle2 > 100) vetoEvent;
 
@@ -252,15 +254,18 @@ namespace Rivet {
       int index3 = -1;
       int index4 = -1;
 
+      //Angles between W jets should be between 100 and 140 degrees
       for(unsigned int i=0; i<jetAngles.size(); i++){
         if(jetAngles[i] < 100 || jetAngles[i] > 140) continue;
         for(unsigned int j=i+1; j<jetAngles.size(); j++){
           if(jetAngles[j] < 100 || jetAngles[j] > 140) continue;
 
+          //Loop through all pairings until we find a non adjacent one
           if( jetIndices1[i] ==  jetIndices1[j] || jetIndices2[i] ==  jetIndices2[j] ||
               jetIndices1[i] ==  jetIndices2[j] || jetIndices2[i] ==  jetIndices1[j]) continue;
 
           isPass = true;
+          //Indexes 1 and 2 should be the first pair, indexes 3 and 4 should be the second
           index1 = jetIndices1[i];
           index2 = jetIndices2[i];
           index3 = jetIndices1[j];
@@ -273,23 +278,59 @@ namespace Rivet {
       //cut if the jets don't fit expected geometry
       _h_cutflow->fill(5);
 
-      fastjet::PseudoJet correctJetPair1 = selectedJets[index1] + selectedJets[index2];
-      fastjet::PseudoJet correctJetPair2 = selectedJets[index3] + selectedJets[index4];
+      //fastjet::PseudoJet correctJetPair1 = selectedJets[index1] + selectedJets[index2];
+      //fastjet::PseudoJet correctJetPair2 = selectedJets[index3] + selectedJets[index4];
+
+      //We're gonna try to ensure the jets are listed in clockwise order
+      //The paper says that the interjet regions have the smallest angles, which we found.
+      
+      std::array<int,4> indices = {index1,index2,index3,index4};
+      std::vector<int> ordered_indices;
+
+      //Start by putting the first of the smallest angle region
+      ordered_indices.push_back(minJetPair_1_jet1index);
+
+      //loop until we find which index matches it, then add its pair
+      for(unsigned int i=0; i<indices.size();i++){
+        if(minJetPair_1_jet1index == indices[i]){
+          if(i%2 == 0){
+            ordered_indices.push_back(indices[i+1]);
+            break;
+          }
+          else{
+            ordered_indices.push_back(indices[i-1]);
+            break;
+          }
+        }
+      }
+
+      //Add the next jet based on the smallest jet pairs
+      if(ordered_indices[1] == minJetPair_2_jet1index)
+        ordered_indices.push_back(minJetPair_2_jet2index);
+      else
+        ordered_indices.push_back(minJetPair_2_jet1index);
+      
+      //Add the last remaining jet, and the first jet again for looping
+      ordered_indices.push_back(minJetPair_1_jet2index);
+      ordered_indices.push_back(minJetPair_1_jet1index);
+      
+      //Ok now ordered_indices should contain all jets in order clockwise
+      //Note: First two are from the same W, next 2 are the other W
+
+      fastjet::PseudoJet correctJetPair1 = selectedJets[ordered_indices[0]] + selectedJets[ordered_indices[1]];
+      fastjet::PseudoJet correctJetPair2 = selectedJets[ordered_indices[2]] + selectedJets[ordered_indices[3]];
 
       _h_dijetMass1->fill(correctJetPair1.m());
       _h_dijetMass2->fill(correctJetPair2.m());
-
       _h_mult_after->fill(particles.size());
 
       //A quest for Figure 6
 
-      int idx[5] = {index1, index2, index3, index4, index1};
-
       for (int i = 0; i < 4; ++i) {
         
         //First we will define a normal vector from a couple of 3 Vectors:
-        Vector3 a(selectedJets[idx[i]].px(), selectedJets[idx[i]].py(), selectedJets[idx[i]].pz());
-        Vector3 b(selectedJets[idx[i+1]].px(), selectedJets[idx[i+1]].py(), selectedJets[idx[i+1]].pz());
+        Vector3 a(selectedJets[ordered_indices[i]].px(), selectedJets[ordered_indices[i]].py(), selectedJets[ordered_indices[i]].pz());
+        Vector3 b(selectedJets[ordered_indices[i+1]].px(), selectedJets[ordered_indices[i+1]].py(), selectedJets[ordered_indices[i+1]].pz());
 
         Vector3 n = a.cross(b);
         double nmag = n.mod();
@@ -347,10 +388,8 @@ namespace Rivet {
 
           // Fill the ratio into the corresponding bin of region_ratio
           region_ratio->fillBin(i, ratio);
-      }
-      
+      } 
     }
-
 
     bool m_debug = false;
 
@@ -385,8 +424,6 @@ namespace Rivet {
     Histo1DPtr insideTotal;
     Histo1DPtr OutsideTotal;
     Histo1DPtr region_ratio;
-
-
   };
 
 
