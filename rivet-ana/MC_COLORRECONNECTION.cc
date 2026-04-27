@@ -63,7 +63,6 @@ namespace Rivet {
       ChargedFinalState tracks(Cuts::pT > 0.2*GeV && Cuts::abseta < m_maxEtaTracks);
       declare(tracks, "tracks");
 
-      // TODO: I'm not sure why the Durham algorithm seems to be failing, but we should figure that out...
       //FastJets jetDurham(fs, FastJets::Algo::DURHAM, m_jetRadius, JetAlg::Muons::NONE, JetAlg::Invisibles::NONE);
       FastJets jetDurham(fs, FastJets::Algo::ANTIKT, m_jetRadius, JetAlg::Muons::NONE, JetAlg::Invisibles::NONE);
       declare(jetDurham, "DurhamJets");
@@ -103,9 +102,9 @@ namespace Rivet {
       book(phi_rescaled, "ParticleFlow_PhiRescaled", 84, -0.2, 4.2);
 
       //Figure 6
-      book(insideTotal, "Inside_W_Region", 36, -0.2, 1.2);
-      book(OutsideTotal, "Outside_W_Region", 36, -0.2, 1.2);
-      book(region_ratio, "Region_Ratio", 36, -0.2, 1.2);
+      book(insideTotal, "Inside_W_Region", 18, -0.2, 1.2);
+      book(OutsideTotal, "Outside_W_Region", 18, -0.2, 1.2);
+      book(region_ratio, "Region_Ratio");
 
       //Diagnostic Plots
       book(_h_mult_nocut, "Multiplicity_before_cuts", 150, -0.5, 150.5);
@@ -216,150 +215,157 @@ namespace Rivet {
       //Add event that survived 4-jet selection
       _h_cutflow->fill(2);
 
-      // Two smallest angles < 100 degrees
-      int minJetPair_1_jet1index = -1;
-      int minJetPair_1_jet2index = -1;
+      //-----------------------------------------------------------------------
+      //The way we do this is a little convoluted right now.
+      //There are 6 possible angles, and 3 possible pairs of smallest angles.
+      //The paper does cuts on the smallest angles < 100 degrees, then 100 < largest < 140
+      //Multiple possible combinations is solved by choosing highest sum of large angles
+      //First, find all 3 pairs of angles:
 
-      int minJetPair_2_jet1index = -1;
-      int minJetPair_2_jet2index = -1;
+      std::vector<double> angles;
 
-      double minJetAngle1 = 1000;
-      double minJetAngle2 = 1000;
-
-      for(unsigned int i=0; i<selectedJets.size(); i++){
-        for(unsigned int j=i; j<selectedJets.size(); j++){
-          if(i==j) continue;
+      //Finds 01,02,03,12,13,23
+      for(int i=0; i<selectedJets.size()-1; i++){
+        for(int j=i+1; j<selectedJets.size(); j++){
           FourMomentum fv1 = FourVector(selectedJets[i].E(), selectedJets[i].px() , selectedJets[i].py(), selectedJets[i].pz());
           FourMomentum fv2 = FourVector(selectedJets[j].E(), selectedJets[j].px() , selectedJets[j].py(), selectedJets[j].pz());
           double angleInDegrees = fv1.angle(fv2) * 180 / 3.14;
+          angles.push_back(angleInDegrees);
+        }
+      }
 
-          if(angleInDegrees < minJetAngle1){
-            minJetPair_2_jet1index = minJetPair_1_jet1index;
-            minJetPair_2_jet2index = minJetPair_1_jet2index;
-            minJetAngle2 = minJetAngle1;
+      //Proper pairs are 05, 14, 23 in angles[]
+      //Though there is nothing differenciating this from choosing for large angles, we start with small
+      //Enforce the pair of angles is <100
 
-            minJetPair_1_jet1index = i;
-            minJetPair_1_jet2index = j;
-            minJetAngle1 = angleInDegrees;
+      std::vector<int> initial_pairs = {0,5,1,4,2,3};
+      std::vector<double> filtered_angles = {-1,-1,-1,-1,-1,-1};
+
+      for(int i=0; i<initial_pairs.size()-1;i+=2){
+        if(angles[initial_pairs[i]] < 100 && angles[initial_pairs[i+1]] < 100){
+          filtered_angles[initial_pairs[i]] = angles[initial_pairs[i]];
+          filtered_angles[initial_pairs[i+1]] = angles[initial_pairs[i+1]];
+        }
+      }
+
+      //Final pairs has a couple possible candidates for the smallest angle pairs
+      //We now cut on 100 < large < 140
+      //If we had jets 01 & 23, the possible large angles are the other two possible pairs
+      //Thus we can check if one of the other 2 pairs is between 100 & 140
+      //If they both work, than that'd mean for that pair of small angles there are 2 possible orientations
+      //We break the tie by which large angle sum is greater
+
+      //We need to collect every pair of large angle cooresponding to the final_pairs of small angles
+      //Then we apply our cut, and we keep the largest sum pair
+
+      //Collect large angle sums obeying cut, always 3 elements
+      //Contains sums 05,14,23
+      std::vector<double> large_sums;
+
+      for(int i=0; i<initial_pairs.size()-1;i+=2){
+        if(100<angles[initial_pairs[i]] && angles[initial_pairs[i]] < 140 &&
+          100<angles[initial_pairs[i+1]] && angles[initial_pairs[i+1]] < 140){
+            large_sums.push_back(angles[initial_pairs[i]] + angles[initial_pairs[i+1]]);
           }
-          else if(angleInDegrees < minJetAngle2){
-            minJetPair_2_jet1index = i;
-            minJetPair_2_jet2index = j;
-            minJetAngle2 = angleInDegrees;
-          }
-
+        else{
+          large_sums.push_back(-1);
         }
       }
 
-      // Find two other angles that are between 100 and 140 degrees, and aren't adjacent
-      //These become the jet pairs from the W
-      std::vector<double> jetAngles;
-      //std::vector<double> jetMasses;
-      std::vector<int> jetIndices1;
-      std::vector<int> jetIndices2;
+      //6 sets of small angle pair + 1 large angle sum
+      std::vector<double> one = {filtered_angles[0], filtered_angles[5], large_sums[1]};
+      std::vector<double> two = {filtered_angles[0], filtered_angles[5], large_sums[2]};
+      std::vector<double> three = {filtered_angles[1], filtered_angles[4], large_sums[0]};
+      std::vector<double> four = {filtered_angles[1], filtered_angles[4], large_sums[2]};
+      std::vector<double> five = {filtered_angles[2], filtered_angles[3], large_sums[0]};
+      std::vector<double> six = {filtered_angles[2], filtered_angles[3], large_sums[1]};
 
-      for(unsigned int i=0; i<selectedJets.size(); i++){
-        for(unsigned int j=i+1; j<selectedJets.size(); j++){
-          //The selected jet pairs aren't the smallest pairs
-          if( (i == minJetPair_1_jet1index && j == minJetPair_1_jet2index) ||
-              (j == minJetPair_1_jet1index && i == minJetPair_1_jet2index) ||
-              (i == minJetPair_2_jet1index && j == minJetPair_2_jet2index) ||
-              (j == minJetPair_2_jet1index && i == minJetPair_2_jet2index) ) continue;
+      //Searching for the correct combination out of these 6
+      std::vector<std::vector<double>> combinations = {one,two,three,four,five,six};
+      int proper_combination = -1;
 
-          FourMomentum fv1 = FourVector(selectedJets[i].E(), selectedJets[i].px() , selectedJets[i].py(), selectedJets[i].pz());
-          FourMomentum fv2 = FourVector(selectedJets[j].E(), selectedJets[j].px() , selectedJets[j].py(), selectedJets[j].pz());
-          double angleInDegrees = fv1.angle(fv2) * 180 / 3.14;
-          //fastjet::PseudoJet jetPair1 = selectedJets[i] + selectedJets[j];
-
-          //Collect the 4 remaining jet combinations and their angles
-          jetIndices1.push_back(i);
-          jetIndices2.push_back(j);
-          jetAngles.push_back(angleInDegrees);
-        }
+      for(int i=0; i<combinations.size(); i++){
+        if(combinations[i][0]<0 || combinations[i][1]<0 || combinations[i][2]<0) 
+          continue;
+        if(proper_combination<0 || combinations[i][2] > combinations[proper_combination][2])
+          proper_combination = i;
       }
+      if(proper_combination < 0) 
+        vetoEvent;
 
-      //Apply cut that the smallest angles must be less than 100 degrees
-      if(minJetAngle1 > 100) vetoEvent;
-      if(minJetAngle2 > 100) vetoEvent;
+      //What we have now is the one combination of 2 angles and 1 large sum cooresponding to the event
+      //Each angle -> 2 jets, 1 sum -> 4 jets
+      //if i==0,1 we have angles 0&5, i.e jets 01,23. 
+      //If i==0, we have large_sum 1, ie angles 1&4, ie jets 02 13
+      //We now move to order by largest, smallest, second-large, second-small angles
 
-      //Cut if the pairs of jets are too wide
-      _h_cutflow->fill(3);
+      std::vector<std::vector<int>> translator = {{0,1,2,3, 0,1,2,3, 0,2,1,3, 0,2,1,3, 0,3,1,2, 0,3,1,2},
+                                                  {0,2,1,3, 0,3,1,2, 0,1,2,3, 0,3,1,2, 0,1,2,3, 0,2,1,3},
+                                                  {1,4, 2,3, 0,5, 2,3, 0,5, 1,4}};
 
-      // These two angles don't share a jet
-      // Not sure if we should veto the event, or just find another pairing
-      if( minJetPair_1_jet1index ==  minJetPair_2_jet1index || minJetPair_1_jet1index ==  minJetPair_2_jet2index ||
-          minJetPair_1_jet2index ==  minJetPair_2_jet1index || minJetPair_1_jet2index ==  minJetPair_2_jet2index){
-         vetoEvent;
-      }
-
-      //Cut if jets are not distinct pairs
-      _h_cutflow->fill(4);
-
-      bool isPass = false;
-      int index1 = -1;
-      int index2 = -1;
-      int index3 = -1;
-      int index4 = -1;
-
-      //Angles between W jets should be between 100 and 140 degrees
-      for(unsigned int i=0; i<jetAngles.size(); i++){
-        if(jetAngles[i] < 100 || jetAngles[i] > 140) continue;
-        for(unsigned int j=i+1; j<jetAngles.size(); j++){
-          if(jetAngles[j] < 100 || jetAngles[j] > 140) continue;
-
-          //Loop through all pairings until we find a non adjacent one
-          if( jetIndices1[i] ==  jetIndices1[j] || jetIndices2[i] ==  jetIndices2[j] ||
-              jetIndices1[i] ==  jetIndices2[j] || jetIndices2[i] ==  jetIndices1[j]) continue;
-
-          isPass = true;
-          //Indexes 1 and 2 should be the first pair, indexes 3 and 4 should be the second
-          index1 = jetIndices1[i];
-          index2 = jetIndices2[i];
-          index3 = jetIndices1[j];
-          index4 = jetIndices2[j];
-        }
-      }
-
-      if(!isPass) vetoEvent;
-
-      //cut if the jets don't fit expected geometry
-      _h_cutflow->fill(5);
-
-      //We're gonna try to ensure the jets are listed in clockwise order
-      //The paper says that the interjet regions have the smallest angles, which we found.
-      
-      std::array<int,4> indices = {index1,index2,index3,index4};
       std::vector<int> ordered_indices;
 
-      //Start by putting the first of the smallest angle region
-      ordered_indices.push_back(minJetPair_1_jet1index);
+      std::vector<int> small_1;
+      std::vector<int> small_2;
+      std::vector<int> large_1;
+      std::vector<int> large_2;
 
-      //loop until we find which index matches it, then add its pair
-      for(unsigned int i=0; i<indices.size();i++){
-        if(minJetPair_1_jet1index == indices[i]){
-          if(i%2 == 0){
-            ordered_indices.push_back(indices[i+1]);
-            break;
-          }
-          else{
-            ordered_indices.push_back(indices[i-1]);
-            break;
-          }
+      if(combinations[proper_combination][0]<combinations[proper_combination][1]){
+        small_1.push_back(translator[0][proper_combination*4]);
+        small_1.push_back(translator[0][(proper_combination*4)+1]);
+        small_2.push_back(translator[0][(proper_combination*4)+2]);
+        small_2.push_back(translator[0][(proper_combination*4)+3]);
+      }
+      else{
+        small_2.push_back(translator[0][proper_combination*4]);
+        small_2.push_back(translator[0][(proper_combination*4)+1]);
+        small_1.push_back(translator[0][(proper_combination*4)+2]);
+        small_1.push_back(translator[0][(proper_combination*4)+3]);
+      }
+
+      if(angles[translator[2][proper_combination*2]] > angles[translator[2][(proper_combination*2)+1]]){
+        large_1.push_back(translator[1][proper_combination*4]);
+        large_1.push_back(translator[1][(proper_combination*4)+1]);
+        large_2.push_back(translator[1][(proper_combination*4)+2]);
+        large_2.push_back(translator[1][(proper_combination*4)+3]);
+      }
+      else{
+        large_2.push_back(translator[1][proper_combination*4]);
+        large_2.push_back(translator[1][(proper_combination*4)+1]);
+        large_1.push_back(translator[1][(proper_combination*4)+2]);
+        large_1.push_back(translator[1][(proper_combination*4)+3]);
+      }
+
+      //Now large_1 has jets of largest region, small_1 has jets of smallest region
+      //Which jet is shared between large_1 and small_1?
+
+      for(int i=0; i<2; i++){
+        if(large_1[i] != small_1[0] && large_1[i] != small_1[1]){
+          ordered_indices.push_back(large_1[i]);
+
+          if(i==1)
+            ordered_indices.push_back(large_1[0]);
+          else 
+            ordered_indices.push_back(large_1[1]);
+
+          if(ordered_indices[1]==small_1[0])
+            ordered_indices.push_back(small_1[1]);
+          else 
+            ordered_indices.push_back(small_1[0]);
         }
       }
 
-      //Add the next jet based on the smallest jet pairs
-      if(ordered_indices[1] == minJetPair_2_jet1index)
-        ordered_indices.push_back(minJetPair_2_jet2index);
-      else
-        ordered_indices.push_back(minJetPair_2_jet1index);
-      
-      //Add the last remaining jet, and the first jet again for looping
-      ordered_indices.push_back(minJetPair_1_jet2index);
-      ordered_indices.push_back(minJetPair_1_jet1index);
-      
-      //Ok now ordered_indices should contain all jets in order clockwise
-      //Note: First two are from the same W, next 2 are the other W
+      for(int i=0;i<2;i++){
+        if(ordered_indices[2] != large_2[i]){
+          ordered_indices.push_back(large_2[i]);
+        }
+      }
+      ordered_indices.push_back(ordered_indices[0]);
+
+      //Successful orientation of jets!
+
+
+      //We should have 4 jets described by ordered indices fulfilling all aspects we needed. 
 
       fastjet::PseudoJet correctJetPair1 = selectedJets[ordered_indices[0]] + selectedJets[ordered_indices[1]];
       fastjet::PseudoJet correctJetPair2 = selectedJets[ordered_indices[2]] + selectedJets[ordered_indices[3]];
@@ -367,6 +373,7 @@ namespace Rivet {
       _h_dijetMass1->fill(correctJetPair1.m());
       _h_dijetMass2->fill(correctJetPair2.m());
       _h_mult_after->fill(particles.size());
+
 
       //For checking proper ordering
       check_index->fill(ordered_indices[0]);
@@ -485,16 +492,16 @@ namespace Rivet {
 
         //Finds smallest deltaR between a truth quark and any jet
         for(int j = 0; j < 4; ++j){
-          FourMomentum loop = FourVector(selectedJets[indices[j]].E(), selectedJets[indices[j]].px() , selectedJets[indices[j]].py(), selectedJets[indices[j]].pz());
+          FourMomentum loop = FourVector(selectedJets[ordered_indices[j]].E(), selectedJets[ordered_indices[j]].px() , selectedJets[ordered_indices[j]].py(), selectedJets[ordered_indices[j]].pz());
           double deltaR1 = deltaR(truth_quarks[i].momentum(),loop);
           if(deltaR1 < deltaR2){
             deltaR2 = deltaR1;
 
             //identify matchedJetindex with the jet paired to selectedJets[j]
             if (j%2 == 0)
-              matchedJetindex = indices[j+1];
+              matchedJetindex = ordered_indices[j+1];
             else
-              matchedJetindex = indices[j-1];
+              matchedJetindex = ordered_indices[j-1];
           }
         }
 
@@ -680,9 +687,11 @@ namespace Rivet {
 
           // Compute the ratio safely
           double ratio = (outsideValue != 0) ? insideValue / outsideValue : 0;
+          std::cout << insideTotal->bin(i).sumW() << "\t" << OutsideTotal->bin(i).sumW() << "\t" << ratio << std::endl;
 
           // Fill the ratio into the corresponding bin of region_ratio
-          region_ratio->fillBin(i, ratio);
+          //region_ratio->fillBin(i, ratio);
+          divide(*insideTotal, *OutsideTotal, region_ratio);
       } 
 
       for (unsigned int i = 0; i < inside1->numBins(); ++i) {
@@ -737,7 +746,7 @@ namespace Rivet {
     //Figure 5, ratio between particle count inside/outside
     Histo1DPtr insideTotal;
     Histo1DPtr OutsideTotal;
-    Histo1DPtr region_ratio;
+    Scatter2DPtr region_ratio;
 
     //Diagnostic plots
     Histo1DPtr _h_mult_nocut;
