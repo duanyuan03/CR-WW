@@ -10,6 +10,7 @@
 #include "Rivet/Projections/FinalPartons.hh"
 #include "Rivet/Tools/ParticleIdUtils.hh"
 #include <fstream>
+#include "Rivet/Projections/Sphericity.hh"
 //#include "Rivet/Logging.hh"
 
 #include <string.h>
@@ -67,17 +68,23 @@ namespace Rivet {
       FastJets jetDurham(fs, FastJets::Algo::ANTIKT, m_jetRadius, JetAlg::Muons::NONE, JetAlg::Invisibles::NONE);
       declare(jetDurham, "DurhamJets");
 
+      //We'll try out this sphericity thing
+      declare(Sphericity(FinalState()), "Sph");
+
 
       ////////////////////////////////////////////////////////////////////////////////////////////////
       // Book histograms
+
+      //Sphericity histogram
+      book(_h_aplanarity, "aplanarity", 50, 0, 0.5);
 
       // One histogram for each of the two jet pairs
       Histo1DPtr tmpDijetMass1;
       Histo1DPtr tmpDijetMass2;
       std::string nameDijetMass1 = "dijet_mass_1";
       std::string nameDijetMass2 = "dijet_mass_2";
-      book(_h_dijetMass1, nameDijetMass1,  40, 0, 120);
-      book(_h_dijetMass2, nameDijetMass2,  40, 0, 120);
+      book(_h_dijetMass1, nameDijetMass1,  40, 60, 100);
+      book(_h_dijetMass2, nameDijetMass2,  40, 60, 100);
 
       book(quarkMassWm, "Wm_Quark_Mass",  40, 0, 120);
       book(quarkMassWp, "Wp_Quark_Mass",  40, 0, 120);
@@ -214,6 +221,12 @@ namespace Rivet {
 
       //Add event that survived 4-jet selection
       _h_cutflow->fill(2);
+
+      //Do aplanarity graph
+      const Sphericity& sph = apply<Sphericity>(event, "Sph");
+      double aplan = sph.aplanarity();
+      if (aplan > 0.1) vetoEvent;
+      _h_aplanarity->fill(sph.aplanarity());
 
       //-----------------------------------------------------------------------
       //The way we do this is a little convoluted right now.
@@ -721,6 +734,8 @@ namespace Rivet {
     const double m_maxEta = 2.1;
 
     const double m_jetRadius = 0.7;
+
+    Histo1DPtr _h_aplanarity;
 
     //std::vector<Histo1DPtr> _h_dijetMasses;
     Histo1DPtr _h_dijetMass1;
