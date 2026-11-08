@@ -95,12 +95,14 @@ namespace Rivet {
 
       //ycut before event vetoes
       book(_h_ycutAll, "ycutAll", 60, 1e-6, 0.5);
+      //ycut after veto
+      book(_h_ycut_After, "ycut_cut", 60, 1e-6, 0.5);
 
       //Selected jets before cut
-      book(_h_selectedJets, "selectedJets", 13, -0.5, 12.5); 
+      book(_h_selectedJets, "selectedJets", 13, -0.5, 12.5);
 
       //particle multiplicity before cuts
-      book(_h_mult_before, "PreMultiplicity", 151, -0.5, 150.5);   
+      book(_h_mult_before, "PreMultiplicity", 151, -0.5, 150.5); 
 
       //particle multiplicity after cuts
       book(_h_mult_after, "PostMultiplicity", 151, -0.5, 150.5);
@@ -157,6 +159,9 @@ namespace Rivet {
       book(regionQD, "Quark_Region_D", 72, -0.5, 180.5);
 
       book(sorted, "Sorted_particles", 13, -0.5, 12.5);
+
+      //planar distance metric
+      book(_h_planarDist, "Planar_Distance", 100, 0.0, 1.0);
       
 
       out = new std::ofstream("outEventDisplay.csv");
@@ -206,10 +211,13 @@ namespace Rivet {
 
           //Add ycut pre-veto
           _h_ycutAll->fill(ycut);
-
+          
+          //ycut is sort of like d12, d23, it ensures the initial split from the quark was soft
+          //so it looks like 1 jet and not 2 subjets.
           if(ycut < 0.005) {
             selectedJets.push_back(jj);
           }
+          _h_ycut_After->fill(ycut);
         }
       }
 
@@ -221,12 +229,6 @@ namespace Rivet {
 
       //Add event that survived 4-jet selection
       _h_cutflow->fill(2);
-
-      //Do aplanarity graph
-      const Sphericity& sph = apply<Sphericity>(event, "Sph");
-      double aplan = sph.aplanarity();
-      if (aplan > 0.1) vetoEvent;
-      _h_aplanarity->fill(sph.aplanarity());
 
       //-----------------------------------------------------------------------
       //The way we do this is a little convoluted right now.
@@ -273,9 +275,10 @@ namespace Rivet {
 
       //Collect large angle sums obeying cut, always 3 elements
       //Contains sums 05,14,23
+
       std::vector<double> large_sums;
 
-      for(int i=0; i<initial_pairs.size()-1;i+=2){
+      for(int i=0; i<initial_pairs.size()-1; i+=2){
         if(100<angles[initial_pairs[i]] && angles[initial_pairs[i]] < 140 &&
           100<angles[initial_pairs[i+1]] && angles[initial_pairs[i+1]] < 140){
             large_sums.push_back(angles[initial_pairs[i]] + angles[initial_pairs[i+1]]);
@@ -305,6 +308,9 @@ namespace Rivet {
       }
       if(proper_combination < 0) 
         vetoEvent;
+
+      //Events surviving the angle cuts
+      _h_cutflow->fill(3);
 
       //What we have now is the one combination of 2 angles and 1 large sum cooresponding to the event
       //Each angle -> 2 jets, 1 sum -> 4 jets
@@ -387,13 +393,29 @@ namespace Rivet {
       _h_dijetMass2->fill(correctJetPair2.m());
       _h_mult_after->fill(particles.size());
 
-
       //For checking proper ordering
       check_index->fill(ordered_indices[0]);
       check_index->fill(ordered_indices[1]);
       check_index->fill(ordered_indices[2]);
       check_index->fill(ordered_indices[3]);
 
+      //Planar distance calculation
+      double best_theta = 0.0;
+      double best_phi = 0.0;
+      double planeDist = planarEMD(particles, best_theta, best_phi);
+      // if (planeDist > 0.1)
+      //   vetoEvent;
+      _h_cutflow->fill(4);
+      _h_planarDist -> fill(planeDist);
+
+      //Do aplanarity graph
+      const Sphericity& sph = apply<Sphericity>(event, "Sph");
+      double aplan = sph.aplanarity();
+      //if (aplan > 0.01) vetoEvent;
+      _h_aplanarity->fill(sph.aplanarity());
+
+      //Events surviving the aplanarity cut
+      _h_cutflow->fill(5);
 
       //Parton Comparison Graph/ Truth particle analysis from Iza
 
@@ -539,6 +561,11 @@ namespace Rivet {
       //
       (*out) << "Event" << std::endl;
 
+      (*out) << "PlaneNormal "
+       << best_theta << " "
+       << best_phi << " "
+       << planeDist << "\n";
+
       // Wp
       (*out) << correctJetPair1.theta() << " " << correctJetPair1.phi() << " " << correctJetPair1.E() << "\n";
       (*out) << fv_Wp.theta() << " " << fv_Wp.phi() << " " << fv_Wp.E() << "\n";
@@ -677,6 +704,46 @@ namespace Rivet {
       }
     }
 
+    double planarEMD(const Particles& particles, double& best_theta, double& best_phi){
+      double cost = 1e9;
+      double beta = 2.0;
+      double total_energy = 0.0;
+
+      for (const Particle& p : particles){
+        total_energy+= p.E();
+      }
+
+      //Rotate around every possible plane in 0.02 radian increments
+      for (double theta = 0.0; theta < M_PI/2; theta+=0.02){
+        for (double phi = 0.0; phi < 2*M_PI; phi +=0.02){
+          
+          Vector3 n_hat(
+            sin(theta)*cos(phi),
+            sin(theta)*sin(phi),
+            cos(theta)
+          );
+
+          double temp_cost = 0.0;
+
+          for (const Particle& p : particles){
+            Vector3 p_vec(p.px(), p.py(), p.pz());
+            Vector3 p_hat = p_vec/p_vec.mod();
+            
+            double E_frac = p.E()/total_energy;
+            double distance = std::sqrt(2*(1-std::sqrt(1 - std::pow((p_hat.dot(n_hat)),2) )));
+
+            temp_cost += E_frac * std::pow(distance,beta);
+          }
+          if (temp_cost<cost){
+            cost = temp_cost;
+            best_theta = theta;
+            best_phi = phi;
+          }
+        }
+      }
+      return cost;
+    }
+
     /// Normalise histograms etc., after the run
     void finalize()
     {
@@ -748,6 +815,9 @@ namespace Rivet {
     Histo1DPtr _h_cutflow;
     //ycut before event cuts
     Histo1DPtr _h_ycutAll;
+    //ycut after event cuts
+    Histo1DPtr _h_ycut_After;
+
     //# of selected jets before cut
     Histo1DPtr _h_selectedJets;
     //particle multiplicity before cuts
@@ -805,6 +875,8 @@ namespace Rivet {
     Histo1DPtr region_b_thetaRescaled;
     Histo1DPtr region_c_thetaRescaled;
     Histo1DPtr region_d_thetaRescaled;
+
+    Histo1DPtr _h_planarDist;
 
     Histo1DPtr sorted;
 
